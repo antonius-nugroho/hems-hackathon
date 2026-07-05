@@ -61,6 +61,26 @@ gcloud services enable \
   artifactregistry.googleapis.com
 ```
 
+If deployment fails with a storage/object access error, grant the project compute service account the needed roles:
+
+```bash
+PROJECT_ID=$(gcloud config get-value project)
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+SERVICE_ACCOUNT="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SERVICE_ACCOUNT" \
+  --role="roles/storage.objectViewer"
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SERVICE_ACCOUNT" \
+  --role="roles/artifactregistry.writer"
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SERVICE_ACCOUNT" \
+  --role="roles/logging.logWriter"
+```
+
 ---
 
 ## 4. Deploy (~8-12 min, mostly unattended)
