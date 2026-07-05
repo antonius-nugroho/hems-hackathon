@@ -9,6 +9,11 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from dotenv import load_dotenv
+from google.adk.agents import Agent
+
+# Load environment variables from .env file
+load_dotenv()
 
 import forecasting as fc
 
@@ -33,6 +38,31 @@ def load_data():
 def get_meta(df):
     return fc.get_household_list(df)
 
+
+@st.cache_data(show_spinner=False)
+def get_ai_recommendation(rec, hh_row):
+    return fc.explain_recommendation(rec, hh_row)
+
+
+@st.cache_data(show_spinner=False)
+def get_ai_correlation_insight(corr, hh_row):
+    return fc.explain_correlation(corr, hh_row)
+
+
+# Initialize the advisor agent at the top level for stable caching
+@st.cache_resource
+def get_advisor_agent(current_hh_id):
+    return Agent(
+        name="HEMSAdvisor",
+        model="gemini-1.5-flash",
+        tools=[fc.get_household_energy_context, fc.get_forecast_summary],
+        instruction=(
+            f"You are a helpful Energy Advisor for Indonesian households. "
+            f"You are currently assisting Household ID: {current_hh_id}. "
+            "Use the provided tools to analyze energy data and forecasts for this specific household. "
+            "Give practical advice on reducing bills by optimizing AC settings and EV charging schedules."
+        )
+    )
 
 @st.cache_data(show_spinner=False)
 def run_forecast(household_id, forecast_days, history_days):
@@ -202,10 +232,12 @@ if recommendations:
         with st.container(border=True):
             rc1, rc2 = st.columns([3, 1])
             with rc1:
+                ai_tip = get_ai_recommendation(rec, hh_row)
                 st.markdown(f"**{rec['date']}** — predicted load: **{rec['predicted_load']} kWh** ⚠️")
-                st.markdown(f"🌡️ {rec['ac_action']} — saves ~Rp {rec['ac_savings_rp']:,.0f}")
+                st.write(ai_tip)
+                st.caption(f"Logic: {rec['ac_action']} — saves ~Rp {rec['ac_savings_rp']:,.0f}")
                 if rec['ev_action']:
-                    st.markdown(f"🚗 {rec['ev_action']} — saves ~Rp {rec['ev_savings_rp']:,.0f}")
+                    st.markdown(f"🚗 {rec['ev_action']}")
             with rc2:
                 st.metric("Est. savings", f"Rp {total_savings:,.0f}")
 else:
@@ -230,6 +262,17 @@ fig2.update_layout(
     height=350, margin=dict(t=20)
 )
 st.plotly_chart(fig2, use_container_width=True)
+
+# Calculate correlation coefficient for interpretation
+correlation = hh_full['temperature_c'].corr(hh_full['total_daily_load_with_ev_kwh'])
+ai_insight = get_ai_correlation_insight(correlation, hh_row)
+
+if ai_insight:
+    st.write(f"**AI Interpretation:** {ai_insight} (Correlation: {correlation:.2f})")
+else:
+    # Fallback to simple description if no AI key is found
+    strength = "strong" if abs(correlation) > 0.6 else "moderate" if abs(correlation) > 0.3 else "weak"
+    st.write(f"**Interpretation:** There is a **{strength}** relationship ({correlation:.2f}) between temperature and energy use.")
 
 st.markdown("---")
 
@@ -297,9 +340,57 @@ with comp_col4:
         st.plotly_chart(fig6, use_container_width=True)
     else:
         st.info("No Solar PV households in current filter.")
+st.markdown("---")
+
+# ---------------------------------------------------------------------------
+# AI Energy Advisor Chat
+# ---------------------------------------------------------------------------
+st.subheader("💬 AI Energy Advisor")
+st.caption("Ask questions about your energy usage, forecast, or tips to save on your bill.")
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+if prompt := st.chat_input("How can I lower my bill next week?"):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # Initialize the advisor agent once using cache_resource
+    @st.cache_resource
+    def get_advisor_agent():
+        return Agent(
+            name="HEMSAdvisor",
+            model="gemini-1.5-flash",
+            tools=[fc.get_household_energy_context, fc.get_forecast_summary],
+            instruction=(
+                "You are a helpful Energy Advisor for Indonesian households. "
+                "Use the provided tools to analyze energy data and forecasts for a specific household. "
+                "Give practical advice on reducing bills by optimizing AC settings and EV charging schedules."
+            )
+        )
+
+    with st.chat_message("assistant"):
+        with st.spinner("Consulting energy data..."):
+            try:
+                advisor = get_advisor_agent()
+                # Run the agent, passing the current household_id as context
+                response = advisor.run(f"Context: The current household ID is {household_id}. User query: {prompt}")
+                # The agent is cached based on the household_id
+                advisor = get_advisor_agent(household_id)
+                response = advisor.run(prompt)
+                output_text = response.get("output", "")
+                st.markdown(output_text)
+                st.session_state.messages.append({"role": "assistant", "content": output_text})
+            except Exception as e:
+                st.error(f"Advisor is currently unavailable: {e}")
 
 st.markdown("---")
 st.caption(
-    "Built for Anthony's GCP HEMS Hackathon Project · Synthetic data reflects Indonesian tropical "
+    "Built for Gen AI Academy APAC Edition Hackathon Project · Synthetic data reflects Indonesian tropical "
     "residential patterns · Prophet model with weather + EV regressors"
 )
