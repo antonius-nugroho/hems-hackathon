@@ -66,12 +66,20 @@ income_filter = st.sidebar.multiselect(
 ev_filter = st.sidebar.selectbox(
     "EV ownership", options=["All", "EV owners only", "Non-EV only"], index=0
 )
+solar_filter = st.sidebar.selectbox(
+    "Solar PV ownership", options=["All", "Solar PV only", "Non-Solar PV only"], index=0
+)
 
 filtered_meta = meta[meta['income_segment'].isin(income_filter)]
 if ev_filter == "EV owners only":
     filtered_meta = filtered_meta[filtered_meta['has_ev'] == True]
 elif ev_filter == "Non-EV only":
     filtered_meta = filtered_meta[filtered_meta['has_ev'] == False]
+
+if solar_filter == "Solar PV only":
+    filtered_meta = filtered_meta[filtered_meta['has_solar'] == True]
+elif solar_filter == "Non-Solar PV only":
+    filtered_meta = filtered_meta[filtered_meta['has_solar'] == False]
 
 household_options = filtered_meta['household_id'].tolist()
 if not household_options:
@@ -255,6 +263,40 @@ with comp_col2:
     ))
     fig4.update_layout(height=320, margin=dict(t=20))
     st.plotly_chart(fig4, use_container_width=True)
+
+comp_col3, comp_col4 = st.columns(2)
+
+with comp_col3:
+    st.markdown("**Average daily load by Solar PV ownership**")
+    solar_compare = df.groupby('has_solar')['total_daily_load_with_ev_kwh'].mean().reset_index()
+    solar_compare['has_solar'] = solar_compare['has_solar'].map({True: 'Solar PV', False: 'Non-Solar PV'})
+    fig5 = go.Figure(go.Bar(
+        x=solar_compare['has_solar'], y=solar_compare['total_daily_load_with_ev_kwh'],
+        marker_color=['#f1c40f', '#7f8c8d'], text=solar_compare['total_daily_load_with_ev_kwh'].round(2),
+        textposition='auto'
+    ))
+    fig5.update_layout(yaxis_title="Avg daily load (kWh)", height=320, margin=dict(t=20))
+    st.plotly_chart(fig5, use_container_width=True)
+
+with comp_col4:
+    st.markdown("**Solar generation offset (Solar PV households only)**")
+    solar_only = df[df['has_solar'] == True]
+    if len(solar_only) > 0:
+        solar_by_month = solar_only.copy()
+        solar_by_month['month'] = solar_by_month['date'].dt.strftime('%b')
+        monthly_solar = solar_by_month.groupby('month').agg(
+            load=('total_daily_load_with_ev_kwh', 'mean'),
+            generation=('solar_generation_kwh', 'mean')
+        ).reindex(['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'])
+        fig6 = go.Figure()
+        fig6.add_trace(go.Bar(x=monthly_solar.index, y=monthly_solar['load'], name='Avg load', marker_color='#7f8c8d'))
+        fig6.add_trace(go.Bar(x=monthly_solar.index, y=monthly_solar['generation'], name='Avg solar generation', marker_color='#f1c40f'))
+        fig6.update_layout(barmode='overlay', yaxis_title="kWh/day", height=320, margin=dict(t=20),
+                            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1))
+        fig6.data[1].marker.opacity = 0.7
+        st.plotly_chart(fig6, use_container_width=True)
+    else:
+        st.info("No Solar PV households in current filter.")
 
 st.markdown("---")
 st.caption(
